@@ -8,3 +8,5 @@ anyhow = "1.0.66"
 rust-powered-lego = "0.2.0"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1.10", features = ["sync"] }
+winit = "0.27.5"
+btleplug = "0.10.1"
