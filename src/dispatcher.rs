@@ -1,10 +1,14 @@
 /// This is an implementation for the Vehicle APIs with respect to the rust_powered_lego crate, 
 /// which is an async crate. This is the reason why it must be seperated into different threads.
-/// The parallel thread will run tokio runtime and control the car. 
-/// The current thread will recieve orders from the feedback engine.
+/// The parallel thread (LegoVehicleDispatcher) will run tokio runtime and control the car. 
+/// The current thread (VehicleAPI) will recieve orders from the feedback engine.
+/// Both combined in LegoVehicleClient
 /// See: Velocirustor.png
 
+use std::thread;
 use std::str::FromStr;
+use std::thread::sleep;
+use std::time::Duration;
 use btleplug::api::BDAddr;
 
 use rust_powered_lego::lego::consts::{
@@ -78,6 +82,10 @@ impl VehicleAPI {
         }
     }
 
+    pub fn print_event_tx(&self) {
+        println!("event_tx: {:?}", self.event_tx);
+    }
+
     fn send_command(
         &self,
         command_id:     VehicleSpecificCommands, 
@@ -87,6 +95,7 @@ impl VehicleAPI {
         end_state:      Option<EndState>,
         command_name:   &str,
     ) -> Result<()> {
+        println!("Sending: {:?}", command_id);
         let res = self.event_tx.send(
             Command {
                 command_id, 
@@ -180,45 +189,38 @@ impl VehicleMotorAPI for VehicleAPI {
 /// LegoVehicleDispatcher is capable of holding a connection to lego hub and controling the motors connected to it.
 /// This is the "other" thread that is running tokio rt.
 /// run_dispatcher is the command event loop that is at the other end of VehicleAPI::send_command
-pub struct LegoVehicleDispatcher {
-    event_rx:   UnboundedReceiver<Command>,
-}
 
-impl LegoVehicleDispatcher {
-    pub fn new(event_rx: UnboundedReceiver<Command>) -> Self {
-        Self {
-            event_rx,
-        }
-    }
+pub async fn run_dispatcher(mut event_rx: UnboundedReceiver<Command>, hub: impl HubType, steer_motor_port: TechnicHubPorts, motor_port: TechnicHubPorts) {
+    let motor = hub.get_motor(motor_port as u8).await.unwrap();
+    let steer_motor = hub.get_motor(steer_motor_port as u8).await.unwrap();
 
-    pub async fn run_dispatcher(&mut self, hub: impl HubType, steer_motor_port: TechnicHubPorts, motor_port: TechnicHubPorts) {
-        let motor = hub.get_motor(motor_port as u8).await.unwrap();
-        let steer_motor = hub.get_motor(steer_motor_port as u8).await.unwrap();
+    loop {
+        let maybe_command = event_rx.try_recv();
 
-        loop {
-            let command = self.event_rx.recv().await.unwrap();
-            
-            match command.command_id {
-                VehicleSpecificCommands::SteerByPosition => {
-                    goto_pos(&steer_motor, command.args_i32.unwrap()[0]).await;
-                },
-                VehicleSpecificCommands::SteerUntilStopped => {
-                    activate_motor(&steer_motor, command.args_i8.unwrap()[0]).await;
-                },
-                VehicleSpecificCommands::StopSteer => {
-                    stop_motor(&steer_motor, command.end_state.unwrap()).await;
-                },
-                VehicleSpecificCommands::ActivateMotorUntilStopped => {
-                    activate_motor(&motor, command.args_i8.unwrap()[0]).await;
-                },
-                VehicleSpecificCommands::StopMotor => {
-                    stop_motor(&motor, command.end_state.unwrap()).await;
-                },
-            }
-                
-        }
+        if maybe_command.is_err() {continue;}
+
+        let command = maybe_command.unwrap();
+        
+        match command.command_id {
+            VehicleSpecificCommands::SteerByPosition => {
+                goto_pos(&steer_motor, command.args_i32.unwrap()[0]).await;
+            },
+            VehicleSpecificCommands::SteerUntilStopped => {
+                activate_motor(&steer_motor, command.args_i8.unwrap()[0]).await;
+            },
+            VehicleSpecificCommands::StopSteer => {
+                stop_motor(&steer_motor, command.end_state.unwrap()).await;
+            },
+            VehicleSpecificCommands::ActivateMotorUntilStopped => {
+                activate_motor(&motor, command.args_i8.unwrap()[0]).await;
+            },
+            VehicleSpecificCommands::StopMotor => {
+                stop_motor(&motor, command.end_state.unwrap()).await;
+            },
+        }      
     }
 }
+
 
 async fn activate_motor<T>(motor: &T, power: i8)
 where
@@ -257,17 +259,21 @@ pub struct LegoVehicleClient {
 
 impl LegoVehicleClient {
     pub fn new(hub_address: &str, steer_motor_port: TechnicHubPorts, motor_port: TechnicHubPorts) -> Self {
-        let runtime = Builder::new_multi_thread()
+
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
+
+        let hub_mac = hub_address.to_owned();
+
+        thread::spawn(move || {
+            let runtime = Builder::new_multi_thread()
             .enable_all()
             .build()
             .unwrap();
 
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
-
-        runtime.block_on(async {
-            let hub = get_hub(hub_address).await.unwrap();
-            runtime.spawn(async move {
-                LegoVehicleDispatcher::new(event_rx).run_dispatcher(hub, steer_motor_port, motor_port).await;
+            runtime.block_on(async {
+                let hub = get_hub(&hub_mac).await.unwrap();
+                run_dispatcher(event_rx, hub, steer_motor_port, motor_port).await;
+                sleep(Duration::from_secs(2));
             });
         });
 
@@ -293,7 +299,7 @@ async fn get_hub(address:  &str) -> Result<Hub> {
     // It is possible to use the name of the hub or its MAC address. That's why it's Option<>
     // Here, only address is implemented
     let hub = cm.get_hub(None, Some(address), 5).await?;
-    
+
     // Great! Let's get on with this...
     Ok(hub)
 }

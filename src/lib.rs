@@ -1,5 +1,6 @@
 /* Modules */
 pub mod dispatcher;
+pub mod decision_engine;
 
 
 /* Modules End */
