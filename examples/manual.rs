@@ -19,7 +19,7 @@ pub fn control_event_loop(client: &VehicleAPI) {
                         virtual_keycode: Some(VirtualKeyCode::Up),
                         state: ElementState::Pressed, 
                         ..}), 
-                    ..} => {if !up_pressed {println!("Got UP!"); up_pressed = true; _ = client.activate_motor_until_stopped(100);}}
+                    ..} => {if !up_pressed {up_pressed = true; _ = client.activate_motor_until_stopped(100);}}
             Event::DeviceEvent {event: DeviceEvent::Key(KeyboardInput {
                         virtual_keycode: Some(VirtualKeyCode::Up),
                         state: ElementState::Released, 
@@ -73,6 +73,5 @@ fn main() {
     let motor_port = TechnicHubPorts::A;
     let steer_motor_port = TechnicHubPorts::B;
     let lvc = LegoVehicleClient::new(hub_address, steer_motor_port, motor_port);
-    println!("Before control_event_loop");
     control_event_loop(lvc.get_client());
 }

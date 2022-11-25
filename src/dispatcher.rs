@@ -95,7 +95,6 @@ impl VehicleAPI {
         end_state:      Option<EndState>,
         command_name:   &str,
     ) -> Result<()> {
-        println!("Sending: {:?}", command_id);
         let res = self.event_tx.send(
             Command {
                 command_id, 
